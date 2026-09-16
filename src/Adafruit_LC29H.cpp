@@ -20,7 +20,27 @@
  */
 Adafruit_LC29H::Adafruit_LC29H(volatile char* firstBuffer,
                                volatile char* secondBuffer, size_t capacity)
-    : Adafruit_GNSS(firstBuffer, secondBuffer, capacity) {}
+    : Adafruit_GNSS(firstBuffer, secondBuffer, capacity),
+      _port(NULL),
+      _timeout(1500),
+      _busy(false),
+      _dispatching(false),
+      _commandStatus(LC29H_COMMAND_NO_PORT),
+      _pairResult(LC29H_PAIR_UNKNOWN),
+      _error(0),
+      _sentenceCallback(NULL),
+      _sentenceContext(NULL),
+      _rtcmBuffer(NULL),
+      _rtcmCapacity(0),
+      _rtcmCallback(NULL),
+      _rtcmContext(NULL),
+      _rtcmLength(0),
+      _rtcmTotal(0),
+      _rtcmCRC(0),
+      _byteTime(0),
+      _rtcmHigh(0),
+      _rtcmCanDeliver(false),
+      _nmeaActive(false) {}
 
 /**
  * @brief Decode the latest complete line as a PAIR acknowledgment.

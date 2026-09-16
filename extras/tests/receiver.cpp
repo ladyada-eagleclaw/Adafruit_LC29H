@@ -20,8 +20,8 @@ static nmea_frame_status_t feed(Adafruit_LC29H& gps, const char* line,
   return status;
 }
 int main() {
-  static_assert(sizeof(Adafruit_LC29H) == sizeof(Adafruit_GNSS),
-                "No extra storage");
+  static_assert(sizeof(Adafruit_LC29H) - sizeof(Adafruit_GNSS) < 160,
+                "Bounded transport state, no embedded packet or fix buffers");
   static_assert(!std::is_copy_constructible<Adafruit_LC29H>::value &&
                     !std::is_copy_assignable<Adafruit_LC29H>::value,
                 "Cannot copy writable receive storage");

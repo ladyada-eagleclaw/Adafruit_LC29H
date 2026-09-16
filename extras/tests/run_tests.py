@@ -21,7 +21,8 @@ def main():
                gps / "Adafruit_NMEA.cpp", gps / "Adafruit_GNSS.cpp"]
     flags = ["-std=c++11", "-Wall", "-Wextra", "-Werror", "-g",
              "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
-             "-fno-omit-frame-pointer", "-I" + str(root / "src"), "-I" + str(gps)]
+             "-fno-omit-frame-pointer", "-I" + str(root / "extras/tests/support"),
+             "-I" + str(root / "src"), "-I" + str(gps)]
     with tempfile.TemporaryDirectory(prefix="lc29h-tests-") as build:
         for index, test in enumerate(tests):
             binary = str(Path(build) / str(index))
