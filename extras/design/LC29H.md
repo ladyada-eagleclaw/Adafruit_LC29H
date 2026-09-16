@@ -1,113 +1,90 @@
 # LC29H receiver contract
 
-The [public header](../../src/Adafruit_LC29H.h) is implemented in this repository
-using Adafruit GPS 1.9.0 or later. See [installation](../../README.md#installation).
-This milestone handles caller-fed bytes and reply decoding; it does not perform
-UART initialization, send commands, or supply RTCM corrections.
+The driver targets LC29H(EA), using Adafruit GPS 1.9.0's shared NMEA/GNSS core.
+It inherits `Adafruit_GNSS`, independently of MTK-specific `Adafruit_GPS`.
+The original proposal is implemented here; other LC29H variants remain unverified.
 
-## First supported path
+## Sources and fixture
 
-This repository is scoped to LC29H, with EA as the initial target. Other H
-variants require protocol verification and testing before being listed as
-supported; this is not a general LC29-family driver.
+- Quectel [LC29H Series & LC79H(AL) GNSS Protocol Specification V1.4](https://www.quectel.com/content/uploads/2022/02/Quectel_LC29H_SeriesLC79HAL_GNSS_Protocol_Specification_V1.4.pdf):
+  PAIR/PQTM framing and command tables, navigation, survey and RTCM formats.
+- Quectel [LC29H Series Hardware Design V1.2](https://www.quectel.com/content/uploads/2022/06/Quectel_LC29H_Series_Hardware_Design_V1.2.pdf),
+  table 12: the 2.8 V domain accepts input-high levels from 1.75 to 3.08 V.
+- HILBERT Rev A schematic: U2 LC29H(EA), TXD to ESP32-S3 GPIO8;
+  GPIO9 through R8 1 kOhm to RXD, R14 5.1 kOhm to ground. The divider gives
+  approximately 2.76 V from a 3.3 V TX. Reset and unrelated pins are untouched.
+- RTCM CRC24Q polynomial cross-check: [RTKLIB rtkcmn.c](https://github.com/tomojitakasu/RTKLIB/blob/master/src/rtkcmn.c). The bitwise implementation here was written independently.
+- [Bench evidence and firmware limits](../hw_tests/README.md).
 
-Target the LC29H(EA) fitted to HILBERT first. The new class inherits
-`Adafruit_GNSS`, independently of the MTK-specific `Adafruit_GPS` API. The legacy
-GPS class currently contains a GNSS receiver; changing its inheritance is a
-separate compatibility decision.
+## Ownership and precision
 
-The first implementation shares byte framing and exact GGA/RMC/GLL position
-decoding, and adds PAIR acknowledgments plus firmware-version replies. Callers
-provide the existing pair of receive buffers. There is no second reader, hidden
-fix history, or heap allocation. Each complete line must be handled before
-feeding the next one. Increasing a particular LC29H sketch's buffer capacity
-will not increase the Uno logger's buffers.
+Two non-overlapping NMEA buffers belong to the caller. The optional RTCM buffer
+also belongs to the caller. The library allocates no heap memory and stores no
+position history. All mutable framing/transaction state belongs to one instance.
 
-`lastPosition()` keeps the shared exact coordinate components and GGA fix
-quality. Applications must check sentence/field validity before using them.
-`degreesE7` and legacy floats are convenience values; use the exact components
-or `formatCoordinate()` when retaining the finer coordinate precision. Logging
-the raw sentence retains the original text. A command reply replaces the latest
-line, so an application wanting a previous position must copy that result.
+`lastPosition()`, `lastPairAck()` and `lastVersion()` describe the latest complete
+text line. Invalid completed lines replace older lines; partial/overflowing
+input preserves the preceding complete line. Binary packets do not replace it.
+Views expire on the next completed text line, reset, a new command's input drain,
+or destruction. Results containing numbers own their values. Firmware fields
+remain bounded borrowed spans, not NUL-terminated strings.
 
-## Protocol contract
+Exact coordinate components and decimal coefficient/scale values retain RTK
+numerical detail. Decimal formatting uses integer arithmetic, including INT64_MIN
+and very small fractions, and refuses insufficient storage rather than rounding.
+A decoder validates all supported populated fields before publishing values.
+Optional missing/empty states remain distinct. No navigation records are merged
+across epochs or sentence types.
 
-Source: Quectel's [LC29H Series & LC79H(AL) GNSS Protocol Specification V1.4](https://www.quectel.com/content/uploads/2022/02/Quectel_LC29H_SeriesLC79HAL_GNSS_Protocol_Specification_V1.4.pdf),
-sections 1.1, 2.3.1, 2.4.1, 2.4.50, and 3. This covers EA; it does not establish
-support for every LC29H variant or firmware.
+## Transport and transactions
 
-- `PAIR001` carries a command ID and result. Results 0/1/2/3/4/5 mean positive
-  acknowledgment, processing, failure, unsupported command, parameter error,
-  and busy. Processing is not completion; a positive acknowledgment is not a
-  position fix or configuration readback. For example, `PAIR865` also returns
-  a separate query result.
-- `PQTMVERNO` takes no fields. Its success reply has version, build date, and
-  build time; failure uses `ERROR,<code>`. PQTM codes 1/2/3 denote parameter,
-  execution, and unsupported-command errors.
-- RTCM is binary. EA supports correction input; this milestone defines neither
-  RTCM decoding nor a correction transport.
+The sketch configures its UART and attaches it with `begin(Stream&)`. A valid
+firmware reply proves bidirectional communication, not every firmware capability.
+`poll()` limits bytes per call. Commands synchronously use the same `feed()` path
+and callbacks, so navigation continues during waits. Reentry is refused; callers
+must serialize threads, callbacks and correction chunks themselves.
 
-The parser deliberately requires exact addresses and field counts.
-PAIR unknown result values fail decoding; version errors retain numeric codes
-through 255, including future codes. These bounds and failure policies are
-library choices. A zero-field firmware query echoed back is not identification.
-Version text is borrowed and is not automatically converted into capabilities.
+Commands use checked bounded construction. A transaction drains queued input
+with a 4096-byte/20-ms limit before transmitting, drops stale partial text, and
+uses a wrapping-safe fixed deadline. Slow Stream methods or callbacks are beyond
+the driver's ability to preempt. No state-changing command is automatically
+retried. After timeout, a delayed response to an identical command is inherently
+ambiguous because the protocol supplies no unique request token.
 
-## Receive ownership and subsequent command work
+PAIR setters require a matching ID and terminal result. PROCESSING never means
+success or extends the deadline. Queries require acknowledgment plus data, in
+either order. PQTM uses an exact address and OK/ERROR payload; VERNO is decoded
+separately. Generic queries validate framing/correlation; typed getters validate
+their complete payload and keep output structs unchanged on failure.
 
-One owner reads the connection and feeds bytes to this instance. Navigation and
-command responses take that same path. The new static decoders also accept a
-validated supplied sentence for host tests, without constructing a receiver.
-Like `Adafruit_GNSS::parsePosition()`, they trust a view produced by the shared
-validator and require its storage to remain unchanged during decoding.
+RTCM3 header length separates binary packets from text, including payload bytes
+that resemble complete NMEA commands. Optional packet delivery requires a valid
+CRC24Q and sufficient buffer space. Maximum payload is 1023 bytes. An inter-byte
+gap over 250 ms abandons partial binary framing. Binary debug output formats are
+not understood and must remain disabled. Raw correction writes report partial
+acceptance without altering bytes or wrapping them in NMEA.
 
-A following transport milestone should initialize an explicitly supplied UART,
-query firmware without changing receiver settings, and keep processing
-navigation during commands. It must define elapsed-time deadlines, partial
-writes, cancellation, and one outstanding command per connection. Match the
-PAIR command ID or complete PQTM address, not merely a text prefix. Processing
-replies must not extend the original deadline indefinitely. No automatic retry
-of state-changing commands is proposed.
+## Configuration policy
 
-PAIR has no per-request sequence token. Draining old input and serializing
-commands reduces stale-reply risk but cannot distinguish a delayed reply to an
-earlier identical command. An eventual API must document this limit and use
-readback where the command supplies it; it must not claim perfect correlation.
+Readbacks always query the receiver. Setters do not cache settings, save NVM,
+change the host UART, stop tracking, or reset hardware implicitly. The public
+comments identify settings requiring save/reboot or stopped GNSS operation.
+`reset()` only clears parser state; `restart()` sends an explicit PAIR start
+command. Restart acknowledgment is not readiness or a reacquired fix.
 
-For now, `buildCommand()` already constructs a bounded firmware query from the
-nine-byte body `PQTMVERNO`. Its output is a command to send, not proof of device
-identity. UART startup, command waiting, reset, configuration setters, and RTCM
-input will be implemented in separate reviewed increments. The inherited
-`reset()` remains a parser reset, so hardware restart needs a distinct name.
+EA-specific omissions are intentional: APIs are not advertised for AA-only
+constellation, elevation-mask, dual-band toggle, DGPS-source, or NMEA-version
+commands. Additional firmware-specific commands can use the explicit PAIR/PQTM
+transaction APIs. Unsupported firmware may reject commands or remain silent;
+check status rather than assuming every command in a family-wide PDF exists.
 
-## Bench contract
+## Verification
 
-The established [receive fixture](https://github.com/adafruit/Adafruit_GPS/blob/4213cb547883b55e70e76cba07cfff1bae7a680b/extras/hw_tests/gnss_receive/README.md) is HILBERT
-ESP32-S3 with LC29H(EA), receiving on GPIO8 at 460800 baud. Existing testing has
-proved reception, not command transmission or a corrected RTK fix.
-
-The locally inspected HILBERT Rev A schematic identifies U2 as LC29H(EA):
-TXD connects directly to GPIO8; GPIO9 reaches RXD through R8 (1 kOhm), with R14
-(5.1 kOhm) to ground. The receiver supply is 3.3 V and VDD_EXT is labeled 2.8 V.
-The existing sketch leaves TX unconfigured. Before enabling GPIO9, verify the
-actual board revision, fitted divider, and receiver input-voltage limits. Leave
-reset, enable, and other pins untouched during the first firmware query.
-
-No hardware changes or commands are part of this implementation.
-
-## Implementation acceptance checks
-
-- Interleaved navigation, firmware replies, and PAIR responses through one
-  receiver; two receiver instances remain independent.
-- Exact address matching, every defined acknowledgment result, unrelated IDs,
-  processing followed by acceptance, and failure without partial output.
-- Bad checksum/framing, missing/empty/extra fields, invalid integer syntax,
-  numeric overflow, unknown PAIR results, and echoed version queries.
-- Version success/error lifetime and replacement by the next complete line;
-  parser reset, overflow recovery, and unsupported sentences.
-- The existing high-precision coordinate cases through the LC29H subclass,
-  including changes smaller than one E7 unit, on AVR and ESP32-S3 builds.
-
-The host regressions exercise the parser cases above. Arduino example builds
-check the interface on target compilers; physical command and correction tests
-remain part of the later transport milestones.
+Every C++ regression under `extras/tests` is discovered automatically. Tests
+cover framing, all defined acknowledgment codes, exact command and reply fields,
+interleaved navigation, ordering, stale input, timeout/wraparound, short writes,
+reentry, two receivers, exact coordinates/PVT/ECEF, and binary CRC/recovery.
+The minimal host Stream fixture tests driver behavior; it does not emulate
+physical UART timing or establish positioning accuracy. Arduino builds exercise
+the real core interfaces. Focused HILBERT tests separately prove identification,
+precision changes and NMEA output effects with original settings restored.

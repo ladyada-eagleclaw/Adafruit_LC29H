@@ -42,7 +42,7 @@ jobs:
     - name: Install released GPS dependency
       run: cp -R gps-dependency "$HOME/Arduino/libraries/Adafruit_GPS"
     - name: Build examples
-      run: python3 ci/build_platform.py main_platforms
+      run: python3 ci/build_platform.py main_platforms feather_esp32s3
     - name: Check formatting
       run: python3 ci/run-clang-format.py -e "ci/*" -e "bin/*" -e "gps-dependency/*" -r .
     - name: Generate documentation
