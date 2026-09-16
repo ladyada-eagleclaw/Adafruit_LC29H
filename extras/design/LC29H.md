@@ -1,11 +1,9 @@
-# LC29H receiver API proposal
+# LC29H receiver contract
 
-This is a reviewable declaration-only milestone. [Adafruit_LC29H.h](Adafruit_LC29H.h)
-is outside `src/` and cannot yet be used as a working driver. It builds on the
-implemented `Adafruit_GNSS` and `Adafruit_NMEA` types supplied by the separate
-Adafruit GPS dependency. See the [dependency revision](../../README.md#development-dependency)
-for the required source checkout. No existing GPS API, compiled code, or receive
-buffer size changes here.
+The [public header](../../src/Adafruit_LC29H.h) is implemented in this repository
+using Adafruit GPS 1.9.0 or later. See [installation](../../README.md#installation).
+This milestone handles caller-fed bytes and reply decoding; it does not perform
+UART initialization, send commands, or supply RTCM corrections.
 
 ## First supported path
 
@@ -18,8 +16,8 @@ Target the LC29H(EA) fitted to HILBERT first. The new class inherits
 GPS class currently contains a GNSS receiver; changing its inheritance is a
 separate compatibility decision.
 
-The first implementation will share byte framing and exact GGA/RMC/GLL position
-decoding, and add PAIR acknowledgments plus firmware-version replies. Callers
+The first implementation shares byte framing and exact GGA/RMC/GLL position
+decoding, and adds PAIR acknowledgments plus firmware-version replies. Callers
 provide the existing pair of receive buffers. There is no second reader, hidden
 fix history, or heap allocation. Each complete line must be handled before
 feeding the next one. Increasing a particular LC29H sketch's buffer capacity
@@ -49,7 +47,7 @@ support for every LC29H variant or firmware.
 - RTCM is binary. EA supports correction input; this milestone defines neither
   RTCM decoding nor a correction transport.
 
-The proposed parser deliberately requires exact addresses and field counts.
+The parser deliberately requires exact addresses and field counts.
 PAIR unknown result values fail decoding; version errors retain numeric codes
 through 255, including future codes. These bounds and failure policies are
 library choices. A zero-field firmware query echoed back is not identification.
@@ -95,7 +93,7 @@ The existing sketch leaves TX unconfigured. Before enabling GPIO9, verify the
 actual board revision, fitted divider, and receiver input-voltage limits. Leave
 reset, enable, and other pins untouched during the first firmware query.
 
-No hardware changes or commands are part of this proposal.
+No hardware changes or commands are part of this implementation.
 
 ## Implementation acceptance checks
 
@@ -110,5 +108,6 @@ No hardware changes or commands are part of this proposal.
 - The existing high-precision coordinate cases through the LC29H subclass,
   including changes smaller than one E7 unit, on AVR and ESP32-S3 builds.
 
-These are requirements for the implementation PR, not claims of tests run for
-this declarations-only proposal.
+The host regressions exercise the parser cases above. Arduino example builds
+check the interface on target compilers; physical command and correction tests
+remain part of the later transport milestones.

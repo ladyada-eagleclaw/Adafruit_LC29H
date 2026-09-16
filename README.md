@@ -2,33 +2,60 @@
 
 Arduino library for Quectel LC29H GNSS modules, starting with the LC29H(EA).
 
-**Under development: this repository currently contains an API proposal, not a
-working Arduino library.** Review the [proposed header](extras/design/Adafruit_LC29H.h)
-and [receiver contract](extras/design/LC29H.md). They cover shared exact-position
-decoding, PAIR command acknowledgments, and firmware-version replies.
+This first implementation receives caller-supplied NMEA bytes, preserves exact
+GGA/RMC/GLL positions, and decodes PAIR acknowledgments and firmware-version
+replies. UART startup, command transactions, configuration, and RTCM input are
+still to come. Additional LC29H variants require protocol and hardware testing.
 
-The driver will support additional LC29H variants as their protocols and
-hardware are tested. General LC29-family compatibility is not promised.
+## Installation
 
-## Development dependency
+Install **Adafruit GPS Library 1.9.0 or later**, then install this library from
+its source ZIP. The shared NMEA/GNSS implementation is a dependency and is not
+copied here. If Library Manager has not indexed GPS 1.9.0 yet, install the
+[released source ZIP](https://github.com/adafruit/Adafruit_GPS/archive/refs/tags/1.9.0.zip).
 
-The shared `Adafruit_NMEA` and `Adafruit_GNSS` classes live in
-[Adafruit GPS](https://github.com/adafruit/Adafruit_GPS). They are reused through
-`#include <Adafruit_GNSS.h>`; their source is not copied into this repository.
+The current Adafruit CI helper installs dependencies by name, so
+`library.properties` lists the established GPS library name. Version 1.9.0 is
+the minimum: older releases do not provide `Adafruit_GNSS.h`. CI checks out the
+1.9.0 release explicitly for both host tests and Arduino builds.
 
-For proposal compile checks, use GPS revision
-[`4213cb547883b55e70e76cba07cfff1bae7a680b`](https://github.com/adafruit/Adafruit_GPS/tree/4213cb547883b55e70e76cba07cfff1bae7a680b)
-and add its `src` directory to the compiler include path. The released GPS
-1.8.0 does not contain this new core. Arduino Library Manager dependency metadata
-will be added when a released GPS version supplies it and this driver is ready.
+## Receiving sentences
 
-The proposal deliberately remains under `extras/design` until its interface is
-reviewed. Its methods have no implementations and cannot yet be linked into a
-sketch. Library examples, Arduino Library CI, and generated documentation will
-be enabled with implementation; the badges above reserve their normal links.
+Provide two non-overlapping receive buffers that outlive the `Adafruit_LC29H`
+object. Pass each byte and its receive time to `feed()`. When it returns
+`NMEA_FRAME_VALID`, inspect `lastPosition()`, `lastPairAck()`, or `lastVersion()`.
+These accessors describe the same latest completed line; they do not retain
+older positions or replies. Process the line before feeding another one.
+
+Position and acknowledgment results own their values. Firmware text spans
+borrow the receive buffer and expire on the next complete line or parser reset.
+Check result and field statuses. A decoded acknowledgment can report rejection
+or continued processing; a positive acknowledgment does not prove a position fix
+or query readback. Match its command ID in the application.
+
+Use exact coordinate components or `formatCoordinate()` to retain finer detail
+than E7/float convenience values. The
+[serial_decode example](examples/serial_decode/serial_decode.ino) accepts pasted
+sentences through Serial Monitor and displays results without sending receiver
+commands. The [receiver contract](extras/design/LC29H.md) records protocol,
+lifetime, and future transport requirements.
+
+## Tests
+
+With a GPS source checkout available, run on Linux:
+
+```sh
+python3 extras/tests/run_tests.py --gps-dir /path/to/Adafruit_GPS
+```
+
+The runner discovers every C++ test under `extras/tests`, using address and
+undefined-behavior sanitizers. CI runs the same command, compiles the Arduino
+example, checks formatting, and generates documentation. These parser tests do
+not establish physical UART-command or RTK correction performance.
 
 ## License
 
-BSD license; see [license.txt](license.txt). Written for Adafruit Industries.
-The proposal originated in [Adafruit GPS PR #201](https://github.com/adafruit/Adafruit_GPS/pull/201)
+MIT license; see [license.txt](license.txt). Written for Adafruit Industries.
+The separately installed Adafruit GPS dependency retains its BSD license.
+The interface originated in [Adafruit GPS PR #201](https://github.com/adafruit/Adafruit_GPS/pull/201)
 and continues here so receiver-specific code has its own repository.
