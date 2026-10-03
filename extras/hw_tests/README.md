@@ -1,4 +1,67 @@
-# HILBERT LC29H hardware tests
+# LC29H hardware tests
+
+## BA breakout over I²C, observed on 2026-10-02
+
+Fixture: LC29H BA breakout Rev A and a USB-connected Metro Mini (ATmega328P).
+Metro 5 V powers breakout VIN/host-side pullups; A4 is SDA, A5 is SCL, and GND
+is shared. The breakout's CH9102 USB port is also connected, with its UART
+switch on USB. Neither that switch nor USB power alone replaces VIN for I²C.
+No wheel-tick, FWD, PPS, wake or reset GPIO connection is configured by the tests.
+
+Firmware: `LC29HBANR11A06S_CSA4`, build `2025/05/28,09:36:24`.
+Arduino target: `arduino:avr:uno`. Enable the AVR Wire timeout as in the sketches.
+
+| Test | Observed result |
+| --- | --- |
+| `03_ba_i2c` | Two firmware queries completed over I²C. The measurement window received 434 checksum-valid sentences, zero invalid sentences and 23 GGA records. Counters exclude startup draining. Autonomous fixes were also observed; no RTK correction source was connected. |
+| `04_ba_imu` | Saved the six standard NMEA rates (all 1), module-frame IMU rate (0) and calibration rate (0). Temporarily selected sensor-only I²C output. DR configuration reported enabled; calibration reports decoded as uncalibrated. Received 200 six-axis reports in 20 seconds at a requested 10 Hz, with zero invalid/implausible samples. Disabling IMU output produced zero reports in the subsequent two-second window. All eight original rates were restored and read back. |
+
+The IMU was stationary at about 27 °C. Acceleration was approximately
+`(-2.18, -2.54, 9.15) m/s²` in module axes, consistent with a tilted board under
+gravity. Gyro output was near zero. Report timestamps had small scheduling
+variation: 92–101 ms was observed during test development; the passing run was
+95–101 ms. The test permits ±10 ms around 100 ms and rejects duplicate/missed
+epochs. This is a data-path/plausibility check, not an IMU accuracy calibration.
+
+Send `RUN` followed by a newline to arm `04_ba_imu`. It disables GSV first to
+reduce bandwidth before the remaining configuration queries, and restores GSV
+last. It restores settings after a failure when their originals are known.
+Neither test writes NVM. Raw logs stay outside Git because navigation includes
+location data.
+
+The public `i2c_basic` sketch also ran on the Metro: startup accepted the GSV
+divisor of 5 and high-precision settings, followed by 67 exact position records
+in a 90-second capture. A simultaneous passive USB capture confirmed five
+checksum-valid GGA records with eight fractional-minute digits for both
+coordinates and an autonomous 16-satellite fix. USB stayed available while I²C
+was active. The sketch remains loaded for further testing.
+A subsequent Metro-only reset, with the GPS still running and fixed, completed
+startup and delivered 37 position records with one sketch startup. No GPS reset
+was needed once the slower satellite output had been selected.
+
+All eight host regression sources pass with ASan/UBSan and warnings as errors.
+All eight public examples compile on Mega and Feather ESP32-S3. The two I²C
+examples and the decoder also compile on Uno (19 builds total). Uno memory:
+`i2c_basic` uses 19,440 bytes flash / 984 bytes static RAM; `ba_imu` uses 16,846 /
+1,025. The decoder uses 9,456 / 733; the new transport bookkeeping adds six bytes
+of static RAM to the prior decoder build. Doxygen 1.8.13 reports no diagnostics.
+
+The default full satellite inventory can outpace 32-byte AVR I²C reads. A long
+pause or host reset may leave a large backlog or interrupt the receiver's
+multi-step I²C protocol. Vendor endpoint recovery restored an ACK, but that
+alone did not establish communication with a full/backlogged FIFO. A full
+module reboot through the independent USB UART cleared the backlog and allowed
+the tests to start. PAIR004 hot navigation restart did not clear that FIFO.
+The successful USB recovery used `PAIR023`; it is not added as an automatic
+library reset. Keep this startup limitation visible when evaluating I²C use.
+The public navigation example slows GSV and the IMU example disables standard
+NMEA on its port. Command acceptance alone is not proof of available bandwidth.
+
+Wheel-count/direction decoding has host coverage, but physical wheel input and
+the other breakout pads remain untested. Vehicle-frame IMU, driving calibration,
+dead-reckoning accuracy, high IMU rates and corrected RTK fixes remain unverified.
+
+## EA on HILBERT
 
 Fixture: HILBERT Rev A, ESP32-S3, LC29H(EA), L1+L5 antenna. LC29H TX is GPIO8;
 GPIO9 drives RX through the board's 1 kOhm/5.1 kOhm divider. Only those UART pins

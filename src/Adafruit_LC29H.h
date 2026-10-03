@@ -56,6 +56,7 @@ typedef struct {
 } lc29h_version_t;
 
 class Stream;
+class Adafruit_LC29H_I2C;
 
 /// Result of a blocking command transaction (distinct from a PAIR result).
 typedef enum : uint8_t {
@@ -213,6 +214,7 @@ class Adafruit_LC29H : public Adafruit_GNSS {
                  size_t capacity);
 
   bool begin(Stream& port, uint32_t timeout = 1500);
+  bool begin(Adafruit_LC29H_I2C& port, uint32_t timeout = 5000);
   void end();
   size_t poll(size_t maximumBytes = 256);
   void reset();
@@ -292,8 +294,10 @@ class Adafruit_LC29H : public Adafruit_GNSS {
   static lc29h_version_t parseVersion(const nmea_sentence_t& sentence);
 
  private:
-  Stream* _port;     ///< Borrowed initialized UART or other duplex Stream.
-  uint32_t _timeout; ///< Command deadline in milliseconds.
+  Stream* _port;          ///< Borrowed initialized UART or other duplex Stream.
+  uint32_t _timeout;      ///< Command deadline in milliseconds.
+  uint32_t _drainTimeout; ///< Stale-input deadline for the attached transport.
+  uint32_t (*_pendingInput)(Stream&); ///< Optional exact queued-input snapshot.
   bool _busy;        ///< Prevent callback reentry into commands/writes.
   bool _dispatching; ///< Callback recursion guard.
   lc29h_command_status_t _commandStatus; ///< Last transaction result.
@@ -315,9 +319,13 @@ class Adafruit_LC29H : public Adafruit_GNSS {
   bool _nmeaActive;    ///< A text frame is in progress.
   bool transact(const char* body, int16_t pairID, const char* address,
                 char* response, size_t capacity, bool version = false);
+  bool beginPort(Stream& port, uint32_t timeout, uint32_t drainTimeout,
+                 uint32_t (*pendingInput)(Stream&) = NULL);
   bool pairValue(uint16_t command, int32_t value);
   int32_t readPairValue(uint16_t command, int32_t minimum, int32_t maximum,
                         int32_t failure = -1, const char* parameters = NULL);
+
+ protected:
   bool badArgument();
   bool badReply();
   static bool decimalRange(nmea_decimal_t value, int32_t minimum,

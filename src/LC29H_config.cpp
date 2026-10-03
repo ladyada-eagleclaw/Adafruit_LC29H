@@ -328,17 +328,23 @@ bool Adafruit_LC29H::getSurvey(lc29h_survey_config_t& config) {
   config = result;
   return true;
 }
-/** @brief Set a PQTM/standard message output divisor.
+/** @brief Set a PQTM/standard message output rate.
  * @param message Name without '$', e.g. PQTMSVINSTATUS or GGA.
- * @param rate Zero disables, 1..20 emits every N applicable fixes; EA standard
+ * @param rate Zero disables, 1..20 emits every N applicable fixes. For BA
+ * PQTMSENMSG only, 10/20/50/100 selects samples per second. EA standard
  * messages should use enableNMEA() because their documented range is 0/1.
  * @param version Required message version for PQTM, or -1 to omit for standard.
  * @return True if accepted by this firmware. Does not guarantee a fix. */
 bool Adafruit_LC29H::setMessageRate(const char* message, uint8_t rate,
                                     int8_t version) {
-  if (!message || !*message || strlen(message) > 24 || rate > 20 ||
-      version < -1)
+  if (!message || !*message || strlen(message) > 24 || version < -1)
     return badArgument();
+  if (!strcmp(message, "PQTMSENMSG")) {
+    if (rate != 0 && rate != 10 && rate != 20 && rate != 50 && rate != 100)
+      return badArgument();
+  } else if (rate > 20) {
+    return badArgument();
+  }
   for (const char* p = message; *p; p++)
     if (!((*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9')))
       return badArgument();
@@ -350,11 +356,12 @@ bool Adafruit_LC29H::setMessageRate(const char* message, uint8_t rate,
              version);
   return sendPQTMCommand(body);
 }
-/** @brief Read a message output divisor, checking returned name and version.
+/** @brief Read a message output rate, checking returned name and version.
  * @param message Name without '$'.
  * @param version PQTM version or -1 for standard NMEA.
- * @return 0..20 divisor, or -1 on failure. A trailing empty version is allowed
- * for standard NMEA as shown in Quectel's protocol example. */
+ * @return 0..20 divisor (PQTMSENMSG: 0/10/20/50/100 Hz), or -1 on failure.
+ * A trailing empty version is allowed for standard NMEA as shown in Quectel's
+ * protocol example. */
 int8_t Adafruit_LC29H::getMessageRate(const char* message, int8_t version) {
   if (!message || !*message || strlen(message) > 24 || version < -1) {
     badArgument();
@@ -377,11 +384,17 @@ int8_t Adafruit_LC29H::getMessageRate(const char* message, int8_t version) {
   nmea_span_t name = nextField(remaining), rate = nextField(remaining),
               ver = nextField(remaining);
   int32_t parsed, parsedVersion;
-  if (!matches(name, message) || !integer(rate, 0, 20, parsed) ||
+  bool sensor = !strcmp(message, "PQTMSENMSG");
+  if (!matches(name, message) || !integer(rate, 0, sensor ? 100 : 20, parsed) ||
       nextField(remaining).data ||
       (version < 0 ? ver.length != 0
                    : (!integer(ver, 0, 127, parsedVersion) ||
                       parsedVersion != version))) {
+    badReply();
+    return -1;
+  }
+  if (sensor && parsed != 0 && parsed != 10 && parsed != 20 && parsed != 50 &&
+      parsed != 100) {
     badReply();
     return -1;
   }

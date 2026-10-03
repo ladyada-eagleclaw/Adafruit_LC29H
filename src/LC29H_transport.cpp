@@ -1,5 +1,5 @@
 /** @file LC29H_transport.cpp
- *  @brief Single-reader UART transactions and mixed NMEA/RTCM reception.
+ *  @brief Single-reader transactions and mixed NMEA/RTCM reception.
  *  Written for Adafruit Industries. MIT license; see license.txt.
  */
 #include <Arduino.h>
@@ -15,9 +15,22 @@
  * identify variant capabilities, change baud, reset hardware, or save settings.
  * On failure the port remains attached for diagnosis with poll(). */
 bool Adafruit_LC29H::begin(Stream& port, uint32_t timeout) {
+  return beginPort(port, timeout, 20);
+}
+/** @brief Attach a transport with its appropriate stale-input deadline.
+ * @param port Already initialized duplex stream.
+ * @param timeout Command timeout in ms.
+ * @param drainTimeout Stale-input timeout in ms.
+ * @param pendingInput Optional queued-input count, or UINT32_MAX on bus error.
+ * @return True on a valid identity reply. */
+bool Adafruit_LC29H::beginPort(Stream& port, uint32_t timeout,
+                               uint32_t drainTimeout,
+                               uint32_t (*pendingInput)(Stream&)) {
   if (_busy || _dispatching)
     return false;
   _port = &port;
+  _drainTimeout = drainTimeout;
+  _pendingInput = pendingInput;
   setCommandTimeout(timeout);
   if (!timeout || timeout > 0x7FFFFFFFUL)
     return badArgument();
@@ -193,7 +206,9 @@ size_t Adafruit_LC29H::poll(size_t maximumBytes) {
  * @param data Correction stream chunk, or NULL only when length is zero.
  * @param length Number of bytes offered.
  * @return Bytes accepted by Stream::write; retry any unsent suffix before
- * sending commands. The caller owns packet framing/CRC and serialization of
+ * sending commands. For I2C, inspect the adapter's lastError(): a bus failure
+ * may have delivered part of the failed chunk, so do not blindly resend it.
+ * The caller owns packet framing/CRC and serialization of
  * chunks; this function does not claim receiver acceptance or an RTK fix.
  * A Stream write can block according to the underlying transport's policy. */
 size_t Adafruit_LC29H::writeCorrections(const uint8_t* data, size_t length) {
@@ -242,7 +257,12 @@ bool Adafruit_LC29H::badReply() {
  * @param capacity Response capacity including NUL.
  * @param version Expect PQTMVERNO's special payload instead of OK.
  * @return True on acceptance plus requested readback; never for PROCESSING.
- * Bytes already queued are drained with a 20 ms/4096-byte bound before sending.
+ * Bytes already queued are drained before sending. UART has a 4096-byte bound.
+ *
+ * The drain deadline is 20 ms for UART, or the begin() timeout for I2C.
+ * I2C drains an exact FIFO snapshot so new navigation arriving during a slow
+ * drain cannot prevent every command from being sent.
+ *
  * There is no wire transaction token: a late reply to an identical earlier
  * request cannot be distinguished. After timeout, let old traffic settle and
  * read back configuration before retrying mutations. Stream I/O and callbacks
@@ -272,13 +292,24 @@ bool Adafruit_LC29H::transact(const char* body, int16_t pairID,
   _busy = true;
   _commandStatus = LC29H_COMMAND_TIMEOUT;
   uint32_t started = millis();
-  size_t drained = 0;
-  while (_port->available() > 0) {
-    if (drained >= 4096 || (uint32_t)(millis() - started) >= 20) {
+  uint32_t drained = 0;
+  uint32_t pending = _pendingInput ? _pendingInput(*_port) : 0;
+  if (pending == UINT32_MAX) {
+    _busy = false;
+    return false;
+  }
+  while (_pendingInput ? drained < pending : _port->available() > 0) {
+    if ((!_pendingInput && drained >= 4096) ||
+        (uint32_t)(millis() - started) >= _drainTimeout) {
       _busy = false;
       return false;
     }
     int byte = _port->read();
+    if (byte < 0 && _pendingInput) {
+      // Do not transmit while a failed I2C read leaves stale replies queued.
+      _busy = false;
+      return false;
+    }
     if (byte < 0)
       break;
     feed((uint8_t)byte, millis());
